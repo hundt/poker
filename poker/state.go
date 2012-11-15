@@ -24,6 +24,8 @@ type ClientGameState struct {
     Hands []*ChineseHand
     Showing []Card
     Turn int
+    Faults []bool
+    Royalties []int
     Payouts [][]float32
     BackWinners, MiddleWinners, FrontWinners []int
     GameId string
@@ -43,16 +45,28 @@ func (gs *GameState) Id() string {
     return gs.key.Encode()
 }
 
+func (gs *GameState) Fix() {
+    for _, hand := range gs.Hands {
+        hand.Fix()
+    }
+}
+
 func (gs *GameState) ClientState() *ClientGameState {
     cgs := &ClientGameState{
         Hands:gs.Hands,
         GameId:gs.key.Encode(),
     }
-    b, m, f := Winners(gs.Hands)
-    cgs.BackWinners, cgs.MiddleWinners, cgs.FrontWinners = b, m, f
-    if gs.Showing != nil {
-        cgs.Showing = gs.Showing
+    for _, hand := range gs.Hands {
+        cgs.Royalties = append(cgs.Royalties, hand.Royalties())
     }
+    if len(gs.Showing) != 0 {
+        cgs.Showing = gs.Showing
+        cgs.Turn = gs.Turn
+    } else {
+        cgs.Faults = Faults(gs.Hands)
+    }
+    b, m, f := Winners(gs.Hands, cgs.Faults)
+    cgs.BackWinners, cgs.MiddleWinners, cgs.FrontWinners = b, m, f
     return cgs
 }
 

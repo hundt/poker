@@ -4,9 +4,10 @@ import (
     "fmt"
     "math/rand"
     "sort"
+    "time"
 )
 
-var r = rand.New(rand.NewSource(0))
+var r = rand.New(rand.NewSource(time.Now().UnixNano()))
 
 type Hand struct {
     Royalty Royalty
@@ -24,6 +25,20 @@ func (h *Hand) String() string {
     return fmt.Sprintf("%s Kickers: %v", h.Royalty, h.Kickers)
 }
 
+func (h *Hand) Fix() *Hand {
+    if (h == nil) {
+        return nil
+    }
+    var nh *Hand;
+    for _, card := range h.Royalty.Cards {
+        nh = nh.Add(card)
+    }
+    for _, card := range h.Kickers {
+        nh = nh.Add(card)
+    }
+    return nh
+}
+
 func (h *Hand) Add(c Card) *Hand {
     if (h == nil) {
         return NewHand([]Card{c})
@@ -32,7 +47,15 @@ func (h *Hand) Add(c Card) *Hand {
     for _, card := range h.Kickers {
         cards = append(cards, card)
     }
-    cards = append(cards, c)
+    found := false
+    for _, other := range cards {
+        if other == c {
+            found = true
+        }
+    }
+    if !found {
+        cards = append(cards, c)
+    }
     return NewHand(cards)
 }
 
@@ -111,12 +134,12 @@ func quadsHand(cards []Card) *Hand {
     }
     if q := filter(cards, cards[0].Rank(), false); len(q) == 4 {
         return &Hand{
-            Royalty: Royalty{Quads, cards},
+            Royalty: Royalty{Quads, q},
             Kickers: filter(cards, cards[0].Rank(), true)}
     }
     if q := filter(cards, cards[1].Rank(), false); len(q) == 4 {
         return &Hand{
-            Royalty: Royalty{Quads, cards},
+            Royalty: Royalty{Quads, q},
             Kickers: filter(cards, cards[1].Rank(), true)}
     }
     return nil
