@@ -205,7 +205,7 @@ const gameTemplateHTML = `
   <script type="text/javascript" src="/_ah/channel/jsapi"></script>
   <div id="content">
   <div id="hand0" style="display:none">
-  <b>Hand 1:</b> [<span id=hand0royalties></span>]<br>
+  <b>Hand 1:</b> [<span id=hand0royalties>-</span>]<br>
   Back: <span id="hand0back"></span><br>
   Middle: <span id="hand0middle"></span><br>
   Front: <span id="hand0front"></span><br>
@@ -216,7 +216,7 @@ const gameTemplateHTML = `
   </div>
   <br>
   <div id="hand1" style="display:none">
-  <b>Hand 2:</b> [<span id=hand1royalties></span>]<br>
+  <b>Hand 2:</b> [<span id=hand1royalties>-</span>]<br>
   Back: <span id="hand1back"></span><br>
   Middle: <span id="hand1middle"></span><br>
   Front: <span id="hand1front"></span><br>
@@ -227,7 +227,7 @@ const gameTemplateHTML = `
   </div>
   <br>
   <div id="hand2" style="display:none">
-  <b>Hand 3:</b> [<span id=hand2royalties></span>]<br>
+  <b>Hand 3:</b> [<span id=hand2royalties>-</span>]<br>
   Back: <span id="hand2back"></span><br>
   Middle: <span id="hand2middle"></span><br>
   Front: <span id="hand2front"></span><br>
@@ -238,7 +238,7 @@ const gameTemplateHTML = `
   </div>
   <br>
   <div id="hand3" style="display:none">
-  <b>Hand 4:</b> [<span id=hand3royalties></span>]<br>
+  <b>Hand 4:</b> [<span id=hand3royalties>-</span>]<br>
   Back: <span id="hand3back"></span><br>
   Middle: <span id="hand3middle"></span><br>
   Front: <span id="hand3front"></span><br>
@@ -328,7 +328,7 @@ const gameTemplateHTML = `
       hands[i].style.display = 'block';
       nexts[i].style.display = 'none';
       faults[i].style.display = 'none';
-      royalties[i].innerText = state['Royalties'][i];
+      royalties[i].childNodes[0].data = state['Royalties'][i];
       if (state['Faults'] && state['Faults'][i]) {
         faults[i].style.display = 'block';
       }
