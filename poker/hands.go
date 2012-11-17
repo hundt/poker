@@ -2,12 +2,8 @@ package poker
 
 import (
     "fmt"
-    "math/rand"
     "sort"
-    "time"
 )
-
-var r = rand.New(rand.NewSource(time.Now().UnixNano()))
 
 type Hand struct {
     Royalty Royalty

@@ -3,7 +3,9 @@ package ui
 import (
     "appengine"
     "appengine/channel"
+    "appengine/datastore"
     "appengine/user"
+    "errors"
     "fmt"
     "html/template"
     "net/http"
@@ -18,23 +20,75 @@ func init() {
     http.HandleFunc("/create", createGame)
     http.HandleFunc("/game", goToGame)
     http.HandleFunc("/play", play)
+    http.HandleFunc("/sit", sit)
+    http.HandleFunc("/start", start)
+    http.HandleFunc("/restart", restart)
 }
 
 func createGame(w http.ResponseWriter, r *http.Request) {
-    n := r.FormValue("n")
+    /*n := r.FormValue("n")
     if n == "" {
         n = "1"
     }
     i, err := strconv.Atoi(n);
     if err != nil {
         http.Error(w, err.Error(), http.StatusInternalServerError)
-    }
-    g := poker.NewGame(i)
-    err = g.Save(r);
+    }*/
+    g := poker.NewGame(0)
+    err := g.Save(r);
     if err != nil {
         http.Error(w, err.Error(), http.StatusInternalServerError)
     }
     http.Redirect(w, r, "/game?id=" + g.Id(), http.StatusFound)
+}
+
+func start(w http.ResponseWriter, r *http.Request) {
+    c := appengine.NewContext(r)
+    id := r.FormValue("id")
+    g, err := poker.LoadGame(id, r)
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+    }
+    if !g.InGame(user.Current(c).Email) {
+        http.Error(w, "You are not in this game", http.StatusInternalServerError)
+    }
+    err = datastore.RunInTransaction(c, func(c appengine.Context) error {
+        g.NextTurn()
+        return g.Save(r)
+    }, nil);
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+    }
+    err = broadcastState(c, g)
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+    }
+}
+
+func restart(w http.ResponseWriter, r *http.Request) {
+    c := appengine.NewContext(r)
+    id := r.FormValue("id")
+    g, err := poker.LoadGame(id, r)
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+    }
+    if !g.InGame(user.Current(c).Email) {
+        http.Error(w, "You are not in this game", http.StatusInternalServerError)
+    }
+    if !g.Finished() {
+        http.Error(w, "Game is not finished", http.StatusInternalServerError)
+    }
+    err = datastore.RunInTransaction(c, func(c appengine.Context) error {
+        g.NewHand()
+        return g.Save(r)
+    }, nil);
+    err = broadcastState(c, g)
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+    }
 }
 
 func addWatcher(gs *poker.GameState, uid string) bool {
@@ -53,6 +107,36 @@ func defineNames(w http.ResponseWriter) {
         fmt.Fprintf(w, "names[%d] = '%s';", i, poker.Card(i).String())
     }
     fmt.Fprint(w, "</script>")
+}
+
+func sit(w http.ResponseWriter, r *http.Request) {
+    c := appengine.NewContext(r)
+    u := user.Current(c)
+    id := r.FormValue("id")
+    g, err := poker.LoadGame(id, r)
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+    }
+    err = datastore.RunInTransaction(c, func(c appengine.Context) error {
+        name := r.FormValue("name")
+        if name == "" {
+            return errors.New("Please choose a name")
+        }
+        return g.Sit(u.Email, name)
+    }, nil);
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+    }
+    if err = g.Save(r); err != nil {
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+    }
+    err = broadcastState(c, g)
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+    }
 }
 
 func goToGame(w http.ResponseWriter, r *http.Request) {
@@ -74,7 +158,7 @@ func goToGame(w http.ResponseWriter, r *http.Request) {
             http.Error(w, err.Error(), http.StatusInternalServerError)
         }
     }
-    json, err := g.ClientState().JSON()
+    json, err := g.ClientState(u.Email).JSON()
     if err != nil {
         http.Error(w, err.Error(), http.StatusInternalServerError)
         return
@@ -87,6 +171,8 @@ func goToGame(w http.ResponseWriter, r *http.Request) {
 }
 
 func play(w http.ResponseWriter, r *http.Request) {
+    c := appengine.NewContext(r)
+    u := user.Current(c)
     g, err := poker.LoadGame(r.FormValue("id"), r)
     if err != nil {
         http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -104,6 +190,9 @@ func play(w http.ResponseWriter, r *http.Request) {
     }
     if pos < poker.Back || pos > poker.Front || idx < 0 || idx >= len(g.Showing) {
         http.Error(w, "Invalid play", http.StatusInternalServerError)
+    }
+    if g.Players[g.Turn] != u.Email {
+        http.Error(w, "It is not your turn!", http.StatusInternalServerError)
     }
     hand := g.Hands[g.Turn]
     card := g.Showing[idx]
@@ -135,34 +224,32 @@ func play(w http.ResponseWriter, r *http.Request) {
     g.Showing = g.Showing[:len(g.Showing)-1]
     if len(g.Showing) == 0 {
         // Someone else's turn
-        g.Turn = (g.Turn + 1) % len(g.Hands)
-        n := 1
-        c := g.Hands[g.Turn].Count()
-        if c == 0 {
-            n = 5
-        } else if (c == 13) {
-            n = 0
-        }
-        g.Showing = g.Deck[g.DeckPos:g.DeckPos + n]
-        g.DeckPos = g.DeckPos + n
+        g.NextTurn()
     }
     if err = g.Save(r); err != nil {
         http.Error(w, err.Error(), http.StatusInternalServerError)
         return
     }
-    json, err := g.ClientState().JSON()
+    err = broadcastState(c, g)
     if err != nil {
         http.Error(w, err.Error(), http.StatusInternalServerError)
         return
     }
-    c := appengine.NewContext(r)
+    //fmt.Fprint(w, json)
+}
+
+func broadcastState(c appengine.Context, g *poker.GameState) error {
     for _, watcher := range g.Watchers {
-        err := channel.Send(c, watcher + g.Id(), json)
+        json, err := g.ClientState(watcher).JSON()
+        if err != nil {
+            return err
+        }
+        err = channel.Send(c, watcher + g.Id(), json)
         if err != nil {
             c.Errorf("sending Game: %v", err)
         }
     }
-    //fmt.Fprint(w, json)
+    return nil
 }
 
 func compare(w http.ResponseWriter, r *http.Request) {
@@ -201,11 +288,12 @@ func pick(w http.ResponseWriter, r *http.Request) {
 var gameTemplate = template.Must(template.New("game").Parse(gameTemplateHTML))
 const gameTemplateHTML = `
 <html>
+  <head><title>Chinese Poker</title></head>
   <body>
   <script type="text/javascript" src="/_ah/channel/jsapi"></script>
   <div id="content">
   <div id="hand0" style="display:none">
-  <b>Hand 1:</b> [<span id=hand0royalties>-</span>]<br>
+  <b><span id=hand0name>Anonymous</span>:</b> [<span id=hand0royalties>-</span>]<br>
   Back: <span id="hand0back"></span><br>
   Middle: <span id="hand0middle"></span><br>
   Front: <span id="hand0front"></span><br>
@@ -216,7 +304,7 @@ const gameTemplateHTML = `
   </div>
   <br>
   <div id="hand1" style="display:none">
-  <b>Hand 2:</b> [<span id=hand1royalties>-</span>]<br>
+  <b><span id=hand1name>Anonymous</span>:</b> [<span id=hand1royalties>-</span>]<br>
   Back: <span id="hand1back"></span><br>
   Middle: <span id="hand1middle"></span><br>
   Front: <span id="hand1front"></span><br>
@@ -227,7 +315,7 @@ const gameTemplateHTML = `
   </div>
   <br>
   <div id="hand2" style="display:none">
-  <b>Hand 3:</b> [<span id=hand2royalties>-</span>]<br>
+  <b><span id=hand2name>Anonymous</span>:</b> [<span id=hand2royalties>-</span>]<br>
   Back: <span id="hand2back"></span><br>
   Middle: <span id="hand2middle"></span><br>
   Front: <span id="hand2front"></span><br>
@@ -238,7 +326,7 @@ const gameTemplateHTML = `
   </div>
   <br>
   <div id="hand3" style="display:none">
-  <b>Hand 4:</b> [<span id=hand3royalties>-</span>]<br>
+  <b><span id=hand3name>Anonymous</span>:</b> [<span id=hand3royalties>-</span>]<br>
   Back: <span id="hand3back"></span><br>
   Middle: <span id="hand3middle"></span><br>
   Front: <span id="hand3front"></span><br>
@@ -248,6 +336,9 @@ const gameTemplateHTML = `
   </div>
   </div>
   </div>
+  <div id=join><input type=button onclick="join()" value=Join> as <input id=joinName type=text value=Anonymous></div>
+  <div id=start><input type=button onclick="start()" value=Start></div>
+  <div id=restart><input type=button onclick="restart()" value=Shuffle></div>
   <script>
     var hands = [document.getElementById('hand0'),
       document.getElementById('hand1'),
@@ -283,10 +374,54 @@ const gameTemplateHTML = `
       document.getElementById('hand1royalties'),
       document.getElementById('hand2royalties'),
       document.getElementById('hand3royalties')];
+      
+    var playerNames = [document.getElementById('hand0name'),
+      document.getElementById('hand1name'),
+      document.getElementById('hand2name'),
+      document.getElementById('hand3name')];
   
     function play(idx, pos) {
        var xhReq = new XMLHttpRequest();
        xhReq.open("GET", "/play?idx=" + idx + "&pos=" + pos + "&id=" + game_id, false);
+       xhReq.onreadystatechange = function() {
+         if (xhReq.status != 200) {
+           alert(xhReq.responseText);
+         } else {
+           //handle(eval('(' + xhReq.responseText + ')'));
+         }
+       }
+       xhReq.send(null);
+    }
+  
+    function join() {
+       var xhReq = new XMLHttpRequest();
+       xhReq.open("GET", "/sit?name=" + document.getElementById('joinName').value + "&id=" + game_id, false);
+       xhReq.onreadystatechange = function() {
+         if (xhReq.status != 200) {
+           alert(xhReq.responseText);
+         } else {
+           //handle(eval('(' + xhReq.responseText + ')'));
+         }
+       }
+       xhReq.send(null);
+    }
+  
+    function start() {
+       var xhReq = new XMLHttpRequest();
+       xhReq.open("GET", "/start?id=" + game_id, false);
+       xhReq.onreadystatechange = function() {
+         if (xhReq.status != 200) {
+           alert(xhReq.responseText);
+         } else {
+           //handle(eval('(' + xhReq.responseText + ')'));
+         }
+       }
+       xhReq.send(null);
+    }
+  
+    function restart() {
+       var xhReq = new XMLHttpRequest();
+       xhReq.open("GET", "/restart?id=" + game_id, false);
        xhReq.onreadystatechange = function() {
          if (xhReq.status != 200) {
            alert(xhReq.responseText);
@@ -328,17 +463,23 @@ const gameTemplateHTML = `
       hands[i].style.display = 'block';
       nexts[i].style.display = 'none';
       faults[i].style.display = 'none';
+      playerNames[i].childNodes[0].data = state['Players'][i];
       royalties[i].childNodes[0].data = state['Royalties'][i];
       if (state['Faults'] && state['Faults'][i]) {
         faults[i].style.display = 'block';
       }
-      if (state['Turn'] == i && state['Showing'] && state['Showing'].length != 0) {
-        var html = "Dealt:";
+      if (state['Started'] && !state['Finished'] && state['Turn'] == i) {
+        var html = "Dealt:<br>";
         for (var j = 0; j < state['Showing'].length; j++) {
-          html += '<br>' + names[state['Showing'][j]];
-          html += '<input type=button value=Back onclick="play(' + j + ',0)">';
-          html += '<input type=button value=Middle onclick="play(' + j + ',1)">';
-          html += '<input type=button value=Front onclick="play(' + j + ',2)">';
+          html += names[state['Showing'][j]] + ' ';
+          if (state['MyTurn']) { 
+            html += '<input type=button value=Back onclick="play(' + j + ',0)">';
+            html += '<input type=button value=Middle onclick="play(' + j + ',1)">';
+            html += '<input type=button value=Front onclick="play(' + j + ',2)">';
+            if (j != state['Showing'].length - 1) {
+              html += '<br>';
+            }
+          }
         }
         nexts[i].innerHTML = html;
         nexts[i].style.display = 'block';
@@ -354,10 +495,24 @@ const gameTemplateHTML = `
     function handle(state) {
       game_id = state['GameId'];
       var hands = state['Hands'];
+      document.getElementById('join').style.display = 'none';
+      if (!state['Started'] && (!state['Players'] || state['Players'].length < 4)) {
+        document.getElementById('join').style.display = 'block';
+      }
+      document.getElementById('start').style.display = 'none';
+      if (!state['Started'] && state['InGame']) {
+        document.getElementById('start').style.display = 'block';
+      }
+      document.getElementById('restart').style.display = 'none';
+      if (state['Finished'] && state['InGame']) {
+        document.getElementById('restart').style.display = 'block';
+      }
       //alert(game_id);
       //alert(hands);
-      for (var i = 0; i < hands.length; i++) {
-        showHand(state, i);
+      if (hands) {
+        for (var i = 0; i < hands.length; i++) {
+          showHand(state, i);
+        }
       }
     }
     

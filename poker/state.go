@@ -6,6 +6,7 @@ import (
     "bytes"
     "encoding/gob"
     "encoding/json"
+    "errors"
     //"fmt"
     "net/http"
 )
@@ -28,6 +29,11 @@ type ClientGameState struct {
     Royalties []int
     Payouts [][]float32
     BackWinners, MiddleWinners, FrontWinners []int
+    Players []string
+    MyTurn bool
+    InGame bool
+    Started bool
+    Finished bool
     GameId string
 }
 
@@ -35,26 +41,24 @@ type GameState struct {
     Deck
     DeckPos int
     Hands []*ChineseHand
+    Button int
     Turn int
     Showing []Card
     Watchers []string
+    Players []string
+    PlayerNames []string
     key *datastore.Key
 }
 
-func (gs *GameState) Id() string {
-    return gs.key.Encode()
-}
-
-func (gs *GameState) Fix() {
-    for _, hand := range gs.Hands {
-        hand.Fix()
-    }
-}
-
-func (gs *GameState) ClientState() *ClientGameState {
+func (gs *GameState) ClientState(id string) *ClientGameState {
     cgs := &ClientGameState{
         Hands:gs.Hands,
         GameId:gs.key.Encode(),
+        Players:gs.PlayerNames,
+        Started:gs.Started(),
+        Finished:gs.Finished(),
+        MyTurn:len(gs.Players) > 0 && gs.Players[gs.Turn] == id,
+        InGame:gs.InGame(id),
     }
     for _, hand := range gs.Hands {
         cgs.Royalties = append(cgs.Royalties, hand.Royalties())
@@ -70,13 +74,80 @@ func (gs *GameState) ClientState() *ClientGameState {
     return cgs
 }
 
+func (gs *GameState) InGame(player string) bool {
+    for _, p := range gs.Players {
+        if p == player {
+            return true
+        }
+    }
+    return false
+}
+
+func (gs *GameState) NewHand() {
+    gs.Deck = NewShuffledDeck()
+    gs.DeckPos = 0
+    gs.Hands = make([]*ChineseHand, 0)
+    for _, _ = range gs.Players {
+        gs.Hands = append(gs.Hands, &ChineseHand{})
+    }
+    gs.Button = (gs.Button + 1)%len(gs.Hands)
+    gs.Turn = gs.Button
+    gs.Showing = nil
+}
+
+func (gs *GameState) Id() string {
+    return gs.key.Encode()
+}
+
+func (gs *GameState) Finished() bool {
+    return len(gs.Hands) > 0 && gs.Hands[gs.Turn].Count() == 13
+}
+
+func (gs *GameState) Sit(id, name string) error {
+    if len(gs.Players) == 4 {
+        return errors.New("Game is full")
+    }
+    if gs.Started() {
+        return errors.New("Game has already started");
+    }
+    gs.Players = append(gs.Players, id)
+    gs.PlayerNames = append(gs.PlayerNames, name)
+    gs.Hands = append(gs.Hands, &ChineseHand{})
+    return nil
+}
+
+func (gs *GameState) Started() bool {
+    return gs.DeckPos > 0
+}
+
+func (gs *GameState) NextTurn() {
+    if (gs.Started()) {
+        gs.Turn = (gs.Turn + 1) % len(gs.Hands)
+    }
+    n := 1
+    c := gs.Hands[gs.Turn].Count()
+    if c == 0 {
+        n = 5
+    } else if (gs.Finished()) {
+        n = 0
+    }
+    gs.Showing = gs.Deck[gs.DeckPos:gs.DeckPos + n]
+    gs.DeckPos = gs.DeckPos + n
+}
+
+func (gs *GameState) Fix() {
+    for _, hand := range gs.Hands {
+        hand.Fix()
+    }
+}
+
 func NewGame(players int) *GameState {
     d := NewShuffledDeck()
     h := make([]*ChineseHand, 0)
     for i := 0; i < players; i++ {
         h = append(h, &ChineseHand{})
     }
-    return &GameState{d, 5, h, 0, d[0:5], nil, nil}
+    return &GameState{d, 0, h, 0, 0, nil, nil, nil, nil, nil}
 }
 
 func (gs *GameState) Bytes() ([]byte, error) {

@@ -2,8 +2,14 @@ package poker
 
 import (
     "fmt"
+    crand "crypto/rand"
     "html/template"
+    "math/big"
+    "math/rand"
+    "time"
 )
+
+var r = rand.New(rand.NewSource(time.Now().UnixNano()))
 
 type Card int
 type Suit int
@@ -69,10 +75,18 @@ func NewOrderedDeck() Deck {
     return d
 }
 
+func nextInt(n int) int {
+    i, err := crand.Int(crand.Reader, big.NewInt(int64(n)))
+    if err != nil {
+        return r.Intn(n)
+    }
+    return int(i.Int64())
+}
+
 func NewShuffledDeck() Deck {
     d := NewOrderedDeck()
     for i, _ := range d {
-        j := i + r.Intn(52 - i)
+        j := i + nextInt(52 - i)
         temp := d[i]
         d[i] = d[j]
         d[j] = temp
